@@ -1,12 +1,13 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
+# huma-nirvana-adapter .gitignore
+
 # Binaries for programs and plugins
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+*.bin
+bin/
 
 # Test binary, built with `go test -c`
 *.test
@@ -17,16 +18,42 @@ coverage.*
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
 # Go workspace file
 go.work
 go.work.sum
 
+# Dependency directories
+vendor/
+
 # env file
 .env
+.env.*
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+
+# Specs (local only, do not commit)
+specs/
+.cursor/
+.specify
+
+# Private planning and agent instructions live in ../my-specs.
+/specs
+/.specify
+/AGENTS.md
+/CLAUDE.md
+/.claude/settings.local.json
+/.agents/skills/speckit-*
+/.claude/skills/speckit-*

@@ -1,0 +1,74 @@
+# huma-nirvana-adapter golangci-lint configuration
+
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+  skip-dirs:
+    - tests/integration
+    - vendor
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - dupl
+    - goconst
+    - gocyclo
+    - gosec
+    - bodyclose
+    - noctx
+    - sqlclosecheck
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  govet:
+    check-shadowing: true
+    enable-all: true
+
+  gocyclo:
+    min-complexity: 15
+
+  dupl:
+    threshold: 100
+
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+
+  goimports:
+    local-prefixes: github.com/alswl/humanirvana
+
+  misspell:
+    locale: US
+
+  unused:
+    checks: all
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - dupl
+        - gosec
+
+  max-issues-per-linter: 50
+  max-same-issues: 3
+  new: false
