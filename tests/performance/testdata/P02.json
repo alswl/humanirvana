@@ -1,0 +1,12 @@
+{
+  "id": "P02",
+  "method": "POST",
+  "path": "/perf/json-small",
+  "header": {
+    "Content-Type": "application/json"
+  },
+  "body_file": "P02.body.json",
+  "want_status": 201,
+  "want_content_type": "application/json",
+  "want_body": "{\"accepted\":true,\"quantity\":1}\n"
+}

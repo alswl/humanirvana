@@ -1,0 +1,12 @@
+{
+  "id": "P03",
+  "method": "POST",
+  "path": "/perf/json-nested",
+  "header": {
+    "Content-Type": "application/json"
+  },
+  "body_file": "P03.body.json",
+  "want_status": 200,
+  "want_content_type": "application/json",
+  "want_body": "{\"count\":32}\n"
+}

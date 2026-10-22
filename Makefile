@@ -1,6 +1,6 @@
 # huma-nirvana-adapter Makefile
 
-.PHONY: all build test lint coverage demo demo-e2e demo-tdd demo-app clean help
+.PHONY: all build test lint coverage cover01 demo demo-e2e demo-tdd demo-app clean help
 
 # Variables
 MODULE := github.com/alswl/humanirvana
@@ -39,6 +39,23 @@ coverage:
 	$(GOCOVER)
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
+
+# COVER-01: statement-weighted coverage of the library packages must be >= 80%.
+# The package set is every package of this module that the root library
+# depends on; tests come from the library and tests/ in one atomic run.
+# Examples are not part of the run.
+COVER_DIR ?= bin/cover01
+COVER_PKGS = $(shell $(GOCMD) list -deps -f '{{if .Module}}{{if eq .Module.Path "$(MODULE)"}}{{.ImportPath}}{{end}}{{end}}' .)
+
+cover01:
+	@mkdir -p $(COVER_DIR)
+	@printf '%s\n' $(COVER_PKGS) > $(COVER_DIR)/packages.txt
+	$(GOTEST) -count=1 -covermode=atomic -coverpkg=$(subst $(space),$(comma),$(COVER_PKGS)) -coverprofile=$(COVER_DIR)/cover.out . ./tests/... > $(COVER_DIR)/test.log 2>&1; status=$$?; cat $(COVER_DIR)/test.log; exit $$status
+	$(GOCMD) run ./tests/unit/cover01/cmd -packages $(COVER_DIR)/packages.txt -profile $(COVER_DIR)/cover.out -summary $(COVER_DIR)/summary.json
+
+empty :=
+space := $(empty) $(empty)
+comma := ,
 
 # Run linter
 lint:
@@ -93,6 +110,7 @@ help:
 	@echo "  build-all      Build for all platforms"
 	@echo "  test           Run all tests"
 	@echo "  coverage       Run tests with coverage report"
+	@echo "  cover01        Enforce COVER-01 (library statement coverage >= 80%)"
 	@echo "  lint           Run golangci-lint"
 	@echo "  demo-e2e       Run demo servers and E2E tests"
 	@echo "  demo-tdd       Run isolated migration behavior tests with race detection"
