@@ -6,8 +6,8 @@ Humanirvana only provides the thin Web adapter (`NewAdapter`, `Handle`, `Bind`,
 the per-request Huma context, and `RegisterLegacy`). There is no migration
 CLI, code generator, or gateway.
 
-Before you start, read [the checklist](checklist.md) and the support table in
-the [README](../README.md#supported-behavior-and-verification-scope).
+Before you start, read [the checklist](checklist.md) and the
+[compatibility reference](../manual/compatibility.md).
 
 ## 1. Choose an operation
 
@@ -24,12 +24,12 @@ existing code:
 
 Start with operations that use JSON or text. CBOR, `application/merge-patch+json`
 and other media absent from Nirvana's registry are rejected with 415 before Huma
-runs (see the README).
+runs.
 
 ## 2. Check capabilities
 
 Look up each input, output, validation and middleware feature the operation
-needs in the README support table. "Tested subset" means only the listed cases
+needs in the [compatibility reference](../manual/compatibility.md). "Tested subset" means only the listed cases
 are verified; check your exact combination in step 4. Stop and keep the
 operation on Nirvana if it needs an unsupported capability.
 

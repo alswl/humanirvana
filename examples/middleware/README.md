@@ -23,4 +23,4 @@ curl -i http://127.0.0.1:18080/greetings/ada
 
 For moving an operation between the original and migrated runtime and rolling
 it back, see the coexistence example in [`examples/coexist`](../coexist/README.md)
-and the [migration guide](../../docs/manual-migration.md).
+and the [migration guide](../../docs/guide/migration.md).

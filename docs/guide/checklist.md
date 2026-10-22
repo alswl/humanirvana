@@ -8,7 +8,7 @@ Use one copy of this list per migrated operation. Every item needs evidence
 - [ ] Go 1.23 or later (CI uses 1.23.12); Huma v2.35.0; Nirvana v0.3.1
       without `replace` directives or a Go workspace.
 - [ ] Every capability the operation uses is listed as supported or a tested
-      subset in the [README](../README.md#supported-behavior-and-verification-scope),
+      subset in the [compatibility reference](../manual/compatibility.md),
       and the exact combination is covered by a comparison test.
 - [ ] The operation does not depend on CBOR, merge-patch, or other media that
       Nirvana's registry does not admit (these return 415/406 before Huma).
