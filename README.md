@@ -41,6 +41,48 @@ Legacy routes retain Nirvana's execution chain; they are not automatically
 converted into Huma validation or OpenAPI operations. The application owns
 startup, configuration, dependency injection, and server shutdown.
 
+## Supported behavior and verification scope
+
+The current baseline is Huma v2.35.0 on unmodified Nirvana v0.3.1.
+Use standard `huma.Register` typed handlers and Huma API/operation middleware.
+Nirvana owns routing and media admission; admitted requests enter the Huma
+middleware, binding, validation, handler, and response chain.
+
+| Capability | Current support | Boundary |
+| --- | --- | --- |
+| GET, HEAD, POST, PUT, PATCH, DELETE | Supported | Other methods panic during registration. |
+| Typed path/query/header and JSON input; defaults and validation | Tested subset | Compatibility tests compare accepted/rejected requests, status, JSON, and Content-Type. This is not a claim that every Huma type/tag combination is covered. |
+| Typed output, response headers/status, errors and OpenAPI | Tested subset | Only the scenarios in the compatibility suite are verified; media admission can disagree with generated OpenAPI. |
+| Huma API/operation middleware and request context | Tested subset | Order, short-circuit and context cases are covered. Nirvana admission can reject a request before Huma middleware runs. |
+| Nirvana Filters/node Middleware and legacy descriptors | Preserved with tested cases | DefinitionModifiers must preserve the bridge callback shape. Real-application migration still requires behavior and side-effect comparisons. |
+| New Huma and existing Nirvana routes on one router | Supported in examples/tests | A method/path has one owner. Legacy routes do not automatically gain Huma validation or OpenAPI. |
+| CBOR with the default Nirvana media registry | Unsupported | Native Huma succeeds; this adapter returns 415 before the Huma callback. |
+| AutoPatch merge-patch, custom raw/custom format media absent from Nirvana's registry | Unsupported for those media | For example application/merge-patch+json, application/x-raw and application/x-test are rejected before their Huma handler runs. This does not mean every RawBody or PATCH use is unsupported. |
+| Identical media-admission errors across Huma and Nirvana | Unsupported | Unknown media can return 415 on both sides with different Content-Type and error bodies. Unsupported Accept can return 406. |
+| All Huma capabilities, real-application lossless migration, coverage/performance targets | Not fully verified | Internal passing tests and synthetic examples do not establish these guarantees. |
+
+## Startup rejection and request-time rejection
+
+Registration already panics for unsupported HTTP methods, invalid Nirvana route
+syntax, conflicting routes, and registration errors. A nil builder, operation,
+or callback also panics. Register all operations before starting the HTTP server;
+discard the unpublished instance if registration fails. Registration is not a
+transaction and does not promise rollback of earlier registrations.
+
+**Unsupported media currently does not cause a startup panic.** It is rejected
+at request time with 415/406. The adapter receives an operation and callback; it
+does not receive the complete Huma format configuration, and middleware/handlers
+can choose media dynamically. It therefore cannot reliably detect every
+unsupported behavior before serving. Do not treat successful startup as proof
+that every configured format is supported.
+
+A startup media preflight would need an explicit application call after all
+registrations and configuration, before serving, to validate declared media
+against the effective Nirvana registry. Such a preflight is not currently
+implemented. It could reject incompatible declarations, but could not prove
+arbitrary middleware/handler behavior compatible or prevent clients from sending
+unknown media. Runtime 415/406 handling would still be required.
+
 ## Compatibility limits
 
 The adapter uses the public descriptor API in unmodified Nirvana v0.3.1.

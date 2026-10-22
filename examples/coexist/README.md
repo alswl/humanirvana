@@ -2,6 +2,18 @@
 
 A synthetic in-memory project/task/message service for exercising locked Nirvana v0.3.1 alongside Huma. It is a runnable feature sample, not a real application migration acceptance test. The current legacy path uses `humanirvana.RegisterLegacy(builder, descriptors)` on an application-owned Nirvana builder; native routes use `huma.Register` directly. Each `showcase.New()` creates separate equivalent Original and adapted stores. Tests construct fresh apps, so state and writes are isolated between cases.
 
+## Runtime arms and migration boundary
+
+| Arm | Runtime | Business state | What it demonstrates |
+| --- | --- | --- | --- |
+| `original` | Unmodified Nirvana v0.3.1 REST builder | Original store | Existing descriptors, handler, Filters, middleware and modifiers. |
+| `adapted` | Same Nirvana builder API plus `humanirvana.NewAdapter` and `RegisterLegacy` | Separate equivalent store | Legacy descriptors retain Nirvana's execution chain through the adapter. It does not make these endpoints Huma typed operations. |
+| `native` | Standard Huma `humago` adapter and `huma.Register` | Equivalent isolated store | Independent upstream Huma HTTP baseline for typed operation and middleware behavior. |
+| `composed` | `huma.NewAPI(..., humanirvana.NewAdapter(builder))`, `huma.Register`, and `RegisterLegacy` on one Nirvana builder/service | Adapted store | Typed Huma operation and legacy descriptor coexist on the same Nirvana router. |
+| `cutover` | Request-time selector over original and RegisterLegacy handlers | Separate equivalent stores | One explicitly assigned method/path can be switched and rolled back without replaying a request. Unassigned routes remain Original. Restart resets both stores. |
+
+The Huma adapter registers each standard typed handler callback through a context-aware Nirvana descriptor. Nirvana performs route/media admission, then the Huma callback performs typed binding, validation and response serialization. In `composed`, `huma.Register` operations and legacy descriptors share the same builder/service/router. `native` remains a separate upstream Huma baseline for paired comparisons. The sample is synthetic and does not satisfy real-application acceptance.
+
 ## 构建与启动
 
 从仓库根目录使用固定 Go 1.23.12 安装路径。下面的构建命令可直接复制；`127.0.0.1:0` 由系统分配动态端口，进程会打印实际地址。把后续 curl 中的 `PORT` 替换成该端口。
@@ -10,6 +22,7 @@ A synthetic in-memory project/task/message service for exercising locked Nirvana
 go build -o ./nirvana-showcase ./examples/coexist/cmd
 ./nirvana-showcase -listen 127.0.0.1:0 -arm original
 # 或：./nirvana-showcase -listen 127.0.0.1:0 -arm adapted
+# 或：./nirvana-showcase -listen 127.0.0.1:0 -arm native
 # 或：./nirvana-showcase -listen 127.0.0.1:0 -arm composed
 # 或：./nirvana-showcase -listen 127.0.0.1:0 -arm cutover -owner original
 ```
@@ -18,11 +31,12 @@ The CLI binds before serving and prints the actual address. `127.0.0.1:0` asks t
 
 - `original`: original Nirvana descriptors and middleware.
 - `adapted`: Huma API with the same legacy descriptor handlers registered by `RegisterLegacy`.
-- `composed`: adapted legacy routes plus additive Huma-native health and async-status routes.
+- `native`: standard Huma typed health/version/status routes on a separate `humago` router.
+- `composed`: typed Huma operations plus legacy descriptors on the same Nirvana router.
 
-`build` and `native` remain aliases for `adapted` and `composed`. `cutover` assigns only `POST /projects/{projectID}/tasks` to the selected owner; every other request goes to Original. `-owner adapted` selects the Huma-backed `RegisterLegacy` path. `-owner` is valid only with `-arm cutover`. To switch or roll back, stop the process and restart with the other owner; there is no hot update or production gateway. Each process creates independent Original and adapted in-memory stores, so a restart resets both stores. The selector changes request ownership only; it does not migrate or reconcile application state.
+`build` remains an alias for `adapted`. `cutover` assigns only `POST /projects/{projectID}/tasks` to the selected owner; every other request goes to Original. `-owner adapted` selects the `RegisterLegacy` path. `-owner` is valid only with `-arm cutover`. To switch or roll back, stop the process and restart with the other owner; there is no hot update or production gateway. Each process creates independent Original and adapted in-memory stores, so a restart resets both stores. The selector changes request ownership only; it does not migrate or reconcile application state.
 
-The original-only routes under `/showcase` deliberately do not appear in Build: they use Nirvana `Auto`, `Form`, `File`, and `Prefab` parameter sources that pilot rejects at Build startup. Their absence from Build is covered by explicit 404 assertions; rejection is covered by a startup-validation test.
+The `/showcase` routes (Auto, Prefab, Form/File) and `/modifier/{projectID}` are registered on both runtimes: Original uses plain `builder.AddDescriptor`, adapted uses `RegisterLegacy` on its own builder with the same modifiers. Because `RegisterLegacy` keeps Nirvana's own execution chain, these parameter sources need no adapter support.
 
 ## 请求示例
 
@@ -48,7 +62,7 @@ curl -i -H 'Authorization: Bearer showcase-token' -H 'Accept: application/json' 
 curl -i -H 'Authorization: Bearer showcase-token' -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{}' -X DELETE http://127.0.0.1:PORT/tasks/1
 ```
 
-仅 Original 可用的 `Auto` context probe 与 multipart 上传：
+`Auto` context probe、Prefab 与 multipart 上传（两种运行时都可用）：
 
 ```sh
 curl -i -H 'X-Request-ID: demo-17' http://127.0.0.1:PORT/showcase/projects/1/context
@@ -61,6 +75,21 @@ curl -i -F 'label=design' -F 'file=@README.md;type=text/markdown' \
 The `X-Demo-Policy: allow` header is required for `GET /projects/1`; the command above supplies it. To see the policy rejection explicitly, run `curl -i -H 'Authorization: Bearer showcase-token' http://127.0.0.1:PORT/projects/1` without the policy header; expect 403 before the handler. JSON body endpoints require explicit Content-Type. In `TestAsyncCreateJobStateTransitionOriginalAndBuild`, async-create sends an empty request body with no Content-Type because the operation declares no request body; job-complete sends `{}` as `application/json`. This does not establish bodyless parity for DELETE or job-complete.
 
 Cutover and rollback are restart-based. Example: start with `-arm cutover -owner original`, stop with Ctrl-C, then start with `-arm cutover -owner adapted`; rollback by restarting with `-owner original`. Both owners use equivalent but separate in-memory stores, and restart resets all demo state.
+
+### 测试观测入口（`-observe`）
+
+`-observe` is off by default. It is test-only demo wiring for black-box checks, not a humanirvana library API and not a production control plane. When enabled, the CLI reserves `/_demo/`:
+
+- `GET /_demo/observe` returns `{"original":{...},"adapted":{...}}`; each store reports `task_writes`, `message_writes`, `handler_calls` and `trace`. In `cutover` it also reports `cutover_owner`. `adapted`, `composed`, `native`, and the adapted cutover owner share the adapted store.
+- `POST /_demo/cutover?owner=original|adapted` switches the single cutover route in the running process and returns the same observation. Unknown owners return 400; arms other than `cutover` return 404. Other methods return 405.
+
+`trace` holds the most recent request that entered the audit middleware (`audit.before`, `auth`, `handler` for write handlers, `audit.after`) or the Huma group middleware (`native.before`, `handler`, `native.after`). Read handlers record no `handler` event. Requests rejected by the request policy Filter stop before middleware, so `trace` and `handler_calls` stay unchanged. `handler_calls` counts project/task/message handlers and `GET /native/health`; job reads/completion and other native routes are not counted.
+
+```sh
+./nirvana-showcase -listen 127.0.0.1:0 -arm cutover -owner original -observe
+curl -s http://127.0.0.1:PORT/_demo/observe
+curl -s -X POST 'http://127.0.0.1:PORT/_demo/cutover?owner=adapted'
+```
 
 `composed` adds routes without external infrastructure:
 
@@ -87,20 +116,20 @@ Official links below are the supplied Nirvana Chinese documentation chapters. AP
 | Built-in struct validation | [Operator](https://caicloud.github.io/nirvana/zh-hans/concepts/operator.html) | `operators/validator.Struct`, `validate:"required,min=3"` | task create accepts normalized title and rejects blank before handler; reserved `internal:` prefix is rejected by the custom operator | pass / pass |
 | Data and Meta result destinations | [Destination](https://caicloud.github.io/nirvana/zh-hans/concepts/destination.html) | `definition.DataResultFor`, `definition.MetaResultFor`, `definition.ErrorResult`, `service.MetaDestinationHandler` | `GET /projects/1/summary`; `TestMetaDestinationSetsHeadersInOriginalAndBuild` checks JSON response plus `X-Project-ID` and `X-Project-Name` | pass / pass |
 | JSON/XML response negotiation | [Destination](https://caicloud.github.io/nirvana/zh-hans/concepts/destination.html) | `Definition.Produces`, `service.AcceptTypes`, registered data producers | `GET /projects/1/representation`; `TestAcceptNegotiatesJSONAndXMLInOriginalAndBuild` sends both Accept values to both runtimes | pass / pass |
-| Prefab request scope and application singleton | [Prefab](https://caicloud.github.io/nirvana/zh-hans/concepts/prefab.html) | `service.Prefab`, `service.RegisterPrefab`, `service.PrefabParameterGenerator` | scope endpoint; `TestPrefabRequestScopeAndSingletonInOriginal`, `TestPilotRejectsOriginalOnlySourcesAtBuildStartup` | pass / Build startup rejects |
-| Auto parameter selection across path and header | [Operator](https://caicloud.github.io/nirvana/zh-hans/concepts/operator.html) | `Definition.Source=Auto`, `source` tags, `AutoParameterGenerator` | context endpoint; `TestOriginalOnlyAutoContextAndMultipartAttachment`, startup rejection test | pass / Build startup rejects |
-| Form and File multipart inputs | [Parameter](https://caicloud.github.io/nirvana/zh-hans/concepts/parameter.html) | form/file parameter helpers, `ParseRequestForm`, generators | attachment endpoint; `TestOriginalOnlyAutoContextAndMultipartAttachment`, startup rejection test | pass / Build startup rejects |
-| Request context value, liveness, deadline propagation | [Context](https://caicloud.github.io/nirvana/zh-hans/concepts/context.html) | handler `context.Context`, `context.WithTimeout` in descriptor middleware | context endpoint; `TestOriginalOnlyAutoContextAndMultipartAttachment` | value/live/deadline pass / Build startup rejects Auto source; disconnect cancellation not tested |
-| Nirvana Filters: request parsing and policy | [Filter](https://caicloud.github.io/nirvana/zh-hans/concepts/filter.html) | `ParseRequestForm` and custom policy Filter | attachment and `GET /projects/1`; `TestOriginalOnlyAutoContextAndMultipartAttachment`, `TestNirvanaFilterShortCircuitsBeforeRouting` | pass / only native adapter filters; custom Nirvana Filter not adapted |
-| Definition Modifier | [API guide](https://caicloud.github.io/nirvana/zh-hans/guides/api.html) | original-only custom `DefinitionModifier` | `/modifier/{projectID}`; `TestDefinitionModifierChangesRuntimeMetadata` | pass / only native adapter modifiers; Nirvana modifier not adapted |
+| Prefab request scope and application singleton | [Prefab](https://caicloud.github.io/nirvana/zh-hans/concepts/prefab.html) | `service.Prefab`, `service.RegisterPrefab`, `service.PrefabParameterGenerator` | scope endpoint; `TestPrefabRequestScopeAndSingletonInBothArms` | pass / pass |
+| Auto parameter selection across path and header | [Operator](https://caicloud.github.io/nirvana/zh-hans/concepts/operator.html) | `Definition.Source=Auto`, `source` tags, `AutoParameterGenerator` | context endpoint; `TestAutoContextAndMultipartAttachmentInBothArms` | pass / pass |
+| Form and File multipart inputs | [Parameter](https://caicloud.github.io/nirvana/zh-hans/concepts/parameter.html) | form/file parameter helpers, `ParseRequestForm`, generators | attachment endpoint; `TestAutoContextAndMultipartAttachmentInBothArms` | pass / pass |
+| Request context value, liveness, deadline propagation | [Context](https://caicloud.github.io/nirvana/zh-hans/concepts/context.html) | handler `context.Context`, `context.WithTimeout` in descriptor middleware | context endpoint; `TestAutoContextAndMultipartAttachmentInBothArms` | value/live/deadline pass / pass; disconnect cancellation not tested |
+| Nirvana Filters: request parsing and policy | [Filter](https://caicloud.github.io/nirvana/zh-hans/concepts/filter.html) | `ParseRequestForm` and custom policy Filter | attachment and `GET /projects/1`; `TestAutoContextAndMultipartAttachmentInBothArms`, `TestRequestPolicyFilterMatchesOriginalAndAdaptedBeforeHandler` | pass / pass (same Filters installed on both builders) |
+| Definition Modifier | [API guide](https://caicloud.github.io/nirvana/zh-hans/guides/api.html) | custom `DefinitionModifier` on its own builder | `/modifier/{projectID}`; `TestDefinitionModifierChangesRuntimeMetadata` | pass / pass |
 | Text/plain consumer, producer, custom result operator | [Operator](https://caicloud.github.io/nirvana/zh-hans/concepts/operator.html) | Nirvana body consumer/producer and result operator | text endpoint; `TestTextPlainConsumerProducerAndResultOperatorBothArms` | pass / pass |
 | Real Nirvana asynchronous job transition | [API guide](https://caicloud.github.io/nirvana/zh-hans/guides/api.html) | `definition.AsyncCreate`, job handlers | async-create/read/complete endpoints; `TestAsyncCreateJobStateTransitionOriginalAndBuild` | queued→completed pass / pass |
-| Additive health and version routes | [API guide](https://caicloud.github.io/nirvana/zh-hans/guides/api.html) | Huma `huma.Register`, `NativeModule`, `RouteClaim` | `/native/health`, `/native/version`; `TestNativeEnhancementIsAdditiveAndDocumented` | no Original equivalent / pass composed; not Nirvana plugins |
+| Standard Huma typed health and version routes | [API guide](https://caicloud.github.io/nirvana/zh-hans/guides/api.html) | Huma `huma.Register`, adapter `Handle`, `humago.New`, group middleware | `/native/health`, `/native/version`; `TestTypedOperationAndMiddlewareMatchHumagoNativeAndNirvanaComposed`, `TestDynamicPortHTTPCutoverAndTypedHumaSmoke` | independent Huma baseline and composed Nirvana router both pass; paired status/header/body/middleware; legacy route retained |
 | Synthetic native async status | [API guide](https://caicloud.github.io/nirvana/zh-hans/guides/api.html) | Huma native operation | `/native/async/{id}`; `TestNativeEnhancementIsAdditiveAndDocumented` | no Original equivalent / fixture only; not async acceptance |
-| Unmigrated original endpoint retained | [API guide](https://caicloud.github.io/nirvana/zh-hans/guides/api.html) | original descriptor with `definition.Get` | `/legacy/status`; auth/rejection test verifies it remains callable | pass / intentionally absent |
+| Unmigrated original endpoint retained | [API guide](https://caicloud.github.io/nirvana/zh-hans/guides/api.html) | original descriptor with `definition.Get` | `/legacy/status`; auth/rejection test verifies it remains callable | pass / pass (registered through `RegisterLegacy`) |
 
 ## Current gaps
 
-The feature table records demonstrated features. Build intentionally rejects Auto/Form/File/Prefab sources at startup, and the general pilot only supports its native adapter Filter/Modifier behavior; this sample does not claim it adapts Nirvana custom Filters or DefinitionModifiers. Native health/version endpoints are additive Huma routes, not Nirvana plugins. `/native/async/{id}` is a static fixture; the separate Nirvana job flow provides the actual queued-to-completed transition. Empty-body parity is not claimed: parity tests send explicit JSON body/content type for bodyless DELETE, async-create, and completion operations. Response panic/committed-write boundaries and external telemetry are outside this demo. Cutover has no hot update or production gateway role, and the two in-memory stores are independent.
+The feature table records demonstrated features. In composed mode Huma typed binding/validation/response serialization run after Nirvana route/media admission, while legacy descriptors retain their original Nirvana execution chain. Native health/version endpoints are Huma operations, not Nirvana plugins. `/native/async/{id}` is a static fixture; the separate Nirvana job flow provides the actual queued-to-completed transition. Empty-body parity is not claimed: parity tests send explicit JSON body/content type for bodyless DELETE and completion operations. Response panic/committed-write boundaries and external telemetry are outside this demo. Cutover has no hot update or production gateway role, and the two in-memory stores are independent.
 
-The adapter's original-vs-Build tests use the same handler functions and compare response/status/content type while asserting one write per arm. Rejection tests assert no extra write or handler replay. The original-only upload test asserts one in-memory attachment. Each test creates a fresh app, preventing cross-test writes.
+The adapter's original-vs-Build tests use the same handler functions and compare response/status/content type while asserting one write per arm. Rejection tests assert no extra write or handler replay. The upload test asserts one in-memory attachment per arm. `TestBehaviorComparisonOriginalVersusAdaptedFullScript` runs one 43-step script over every legacy route on two fresh apps and requires identical status, Content-Type, selected headers, normalized full body (error bodies included), trace and side-effect counts; only `deadline` and the process-global prefab `sequence` are normalized. `TestBehaviorComparisonDetectsDifference` checks the comparison is not vacuous. Each test creates a fresh app, preventing cross-test writes.

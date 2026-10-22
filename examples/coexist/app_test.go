@@ -28,92 +28,94 @@ type response struct {
 	body        any
 }
 
-func TestOriginalOnlyAutoContextAndMultipartAttachment(t *testing.T) {
-	app, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestAutoContextAndMultipartAttachmentInBothArms(t *testing.T) {
+	for _, arm := range []string{"original", "adapted"} {
+		app, err := New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler, err := app.Handler(arm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		probeReq := httptest.NewRequest(http.MethodGet, "/showcase/projects/1/context", nil)
+		probeReq.Header.Set("X-Request-ID", "ctx-demo-17")
+		probeW := httptest.NewRecorder()
+		handler.ServeHTTP(probeW, probeReq)
+		if probeW.Code != http.StatusOK || !bytes.Contains(probeW.Body.Bytes(), []byte(`"request_id":"ctx-demo-17"`)) || !bytes.Contains(probeW.Body.Bytes(), []byte(`"context_alive":true`)) || !bytes.Contains(probeW.Body.Bytes(), []byte(`"has_deadline":true`)) {
+			t.Fatalf("%s Auto/context status=%d body=%s", arm, probeW.Code, probeW.Body.String())
+		}
 
-	probeReq := httptest.NewRequest(http.MethodGet, "/showcase/projects/1/context", nil)
-	probeReq.Header.Set("X-Request-ID", "ctx-demo-17")
-	probeW := httptest.NewRecorder()
-	app.Original.ServeHTTP(probeW, probeReq)
-	if probeW.Code != http.StatusOK || !bytes.Contains(probeW.Body.Bytes(), []byte(`"request_id":"ctx-demo-17"`)) || !bytes.Contains(probeW.Body.Bytes(), []byte(`"context_alive":true`)) || !bytes.Contains(probeW.Body.Bytes(), []byte(`"has_deadline":true`)) {
-		t.Fatalf("Auto/context status=%d body=%s", probeW.Code, probeW.Body.String())
-	}
-
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-	if err := mw.WriteField("label", "design"); err != nil {
-		t.Fatal(err)
-	}
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", `form-data; name="file"; filename="brief.txt"`)
-	h.Set("Content-Type", "text/plain")
-	part, err := mw.CreatePart(h)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = part.Write([]byte("brief"))
-	_ = mw.Close()
-	req := httptest.NewRequest(http.MethodPost, "/showcase/projects/1/attachments", &body)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	w := httptest.NewRecorder()
-	app.Original.ServeHTTP(w, req)
-	if w.Code != http.StatusCreated || !bytes.Contains(w.Body.Bytes(), []byte(`"size":5`)) || !bytes.Contains(w.Body.Bytes(), []byte(`"label":"design"`)) {
-		t.Fatalf("multipart upload status=%d body=%s", w.Code, w.Body.String())
-	}
-	app.originalStore.mu.Lock()
-	defer app.originalStore.mu.Unlock()
-	if len(app.originalStore.attachments) != 1 {
-		t.Fatalf("attachments=%d", len(app.originalStore.attachments))
-	}
-}
-
-func TestOriginalOnlyFeatureIsNotSilentlyExposedByBuild(t *testing.T) {
-	app, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{"/showcase/projects/1/context", "/showcase/projects/1/attachments", "/showcase/projects/1/scope"} {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		if err := mw.WriteField("label", "design"); err != nil {
+			t.Fatal(err)
+		}
+		h := make(textproto.MIMEHeader)
+		h.Set("Content-Disposition", `form-data; name="file"; filename="brief.txt"`)
+		h.Set("Content-Type", "text/plain")
+		part, err := mw.CreatePart(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = part.Write([]byte("brief"))
+		_ = mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/showcase/projects/1/attachments", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
 		w := httptest.NewRecorder()
-		app.Build.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("Build unexpectedly exposed %s: %d %s", path, w.Code, w.Body.String())
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated || !bytes.Contains(w.Body.Bytes(), []byte(`"size":5`)) || !bytes.Contains(w.Body.Bytes(), []byte(`"label":"design"`)) {
+			t.Fatalf("%s multipart upload status=%d body=%s", arm, w.Code, w.Body.String())
+		}
+		s := app.buildStore
+		if arm == "original" {
+			s = app.originalStore
+		}
+		s.mu.Lock()
+		n := len(s.attachments)
+		s.mu.Unlock()
+		if n != 1 {
+			t.Fatalf("%s attachments=%d", arm, n)
 		}
 	}
 }
 
-func TestPrefabRequestScopeAndSingletonInOriginal(t *testing.T) {
-	app, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := call(t, app.Original, http.MethodGet, "/showcase/projects/1/scope", "", "")
-	second := call(t, app.Original, http.MethodGet, "/showcase/projects/1/scope", "", "")
-	if first.status != http.StatusOK || second.status != http.StatusOK {
-		t.Fatalf("responses=%+v %+v", first, second)
-	}
-	var a, b struct {
-		Request struct {
-			RequestID string  `json:"request_id"`
-			Sequence  float64 `json:"sequence"`
-		} `json:"request_scope"`
-		Config struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-		} `json:"config"`
-	}
-	ja, _ := json.Marshal(first.body)
-	jb, _ := json.Marshal(second.body)
-	if err := json.Unmarshal(ja, &a); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(jb, &b); err != nil {
-		t.Fatal(err)
-	}
-	if a.Request.RequestID != "showcase-test" || b.Request.Sequence <= a.Request.Sequence || a.Config.Name != "showcase" || a.Config.Version != "v1" || b.Config != a.Config {
-		t.Fatalf("first=%s second=%s", ja, jb)
+func TestPrefabRequestScopeAndSingletonInBothArms(t *testing.T) {
+	for _, arm := range []string{"original", "adapted"} {
+		app, err := New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		handler, err := app.Handler(arm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := call(t, handler, http.MethodGet, "/showcase/projects/1/scope", "", "")
+		second := call(t, handler, http.MethodGet, "/showcase/projects/1/scope", "", "")
+		if first.status != http.StatusOK || second.status != http.StatusOK {
+			t.Fatalf("%s responses=%+v %+v", arm, first, second)
+		}
+		var a, b struct {
+			Request struct {
+				RequestID string  `json:"request_id"`
+				Sequence  float64 `json:"sequence"`
+			} `json:"request_scope"`
+			Config struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"config"`
+		}
+		ja, _ := json.Marshal(first.body)
+		jb, _ := json.Marshal(second.body)
+		if err := json.Unmarshal(ja, &a); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(jb, &b); err != nil {
+			t.Fatal(err)
+		}
+		if a.Request.RequestID != "showcase-test" || b.Request.Sequence <= a.Request.Sequence || a.Config.Name != "showcase" || a.Config.Version != "v1" || b.Config != a.Config {
+			t.Fatalf("%s first=%s second=%s", arm, ja, jb)
+		}
 	}
 }
 
@@ -188,10 +190,12 @@ func TestDefinitionModifierChangesRuntimeMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := httptest.NewRecorder()
-	app.Original.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/modifier/1", nil))
-	if w.Code != http.StatusOK || w.Header().Get("X-Showcase-Modifier") != "project-1" {
-		t.Fatalf("modifier status=%d header=%q body=%s", w.Code, w.Header().Get("X-Showcase-Modifier"), w.Body.String())
+	for _, h := range []http.Handler{app.Original, app.Build} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/modifier/1", nil))
+		if w.Code != http.StatusOK || w.Header().Get("X-Showcase-Modifier") != "project-1" {
+			t.Fatalf("modifier status=%d header=%q body=%s", w.Code, w.Header().Get("X-Showcase-Modifier"), w.Body.String())
+		}
 	}
 }
 
@@ -378,6 +382,141 @@ func TestPerOperationCutoverRollbackHasSingleOwner(t *testing.T) {
 	}
 }
 
+func TestRouteOwnershipRejectsInvalidAndDuplicateDeclarations(t *testing.T) {
+	app, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, routes := range []map[string]string{
+		{"BROKEN": "original"},
+		{"POST /tasks/{id}": "third"},
+		{"GET /items/{id}": "original", "GET /items/current": "adapted"},
+	} {
+		if _, err := NewRouteCutoverFor(app, routes); err == nil {
+			t.Fatalf("accepted invalid ownership map: %#v", routes)
+		}
+	}
+	selector, err := NewRouteCutoverFor(app, map[string]string{"POST /projects/{projectID}/tasks": "adapted", "GET /legacy/status": "original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := selector.SetOwner("typo"); err == nil {
+		t.Fatal("accepted invalid cutover owner")
+	}
+}
+
+func TestStandardHumaHandlerAndMiddlewareUseSameBusinessStore(t *testing.T) {
+	app, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	app.Native.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/native/health", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"contract":"native"`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if trace := app.Trace("adapted"); !reflect.DeepEqual(trace, []string{"native.before", "handler", "native.after"}) {
+		t.Fatalf("Huma middleware trace=%v", trace)
+	}
+	_, _, calls := app.SideEffects("adapted")
+	if calls != 1 {
+		t.Fatalf("shared business store calls=%d", calls)
+	}
+}
+
+func TestTypedOperationAndMiddlewareMatchHumagoNativeAndNirvanaComposed(t *testing.T) {
+	app, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(h http.Handler) response {
+		req := httptest.NewRequest(http.MethodGet, "/native/health", nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		var body any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return response{status: w.Code, contentType: w.Header().Get("Content-Type"), body: body}
+	}
+	native := request(app.Native)
+	app.buildStore.mu.Lock()
+	app.buildStore.trace = nil
+	app.buildStore.mu.Unlock()
+	composed := request(app.Composed)
+	if !reflect.DeepEqual(native, composed) {
+		t.Fatalf("native=%+v composed=%+v", native, composed)
+	}
+	if native.status != http.StatusOK || !strings.HasPrefix(native.contentType, "application/json") || !strings.Contains(fmt.Sprint(native.body), "native") {
+		t.Fatalf("unexpected typed response: %+v", native)
+	}
+	if got := app.Trace("adapted"); !reflect.DeepEqual(got, []string{"native.before", "handler", "native.after"}) {
+		t.Fatalf("composed Huma middleware trace=%v", got)
+	}
+	w := httptest.NewRecorder()
+	app.Composed.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/legacy/status", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "original-only") {
+		t.Fatalf("composed legacy route status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDynamicPortHTTPCutoverAndTypedHumaSmoke(t *testing.T) {
+	for _, owner := range []string{"original", "adapted"} {
+		app, err := New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		selector, err := NewRouteCutoverFor(app, map[string]string{"POST /projects/{projectID}/tasks": owner})
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := httptest.NewServer(selector)
+		client := server.Client()
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/projects/1/tasks", strings.NewReader(`{"title":"live smoke"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer showcase-token")
+		req.Header.Set("X-Demo-Policy", "allow")
+		req.Header.Set("Content-Type", "application/json")
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != http.StatusCreated || !bytes.Contains(body, []byte(`"title":"live smoke"`)) {
+			t.Fatalf("owner=%s POST status=%d body=%s", owner, res.StatusCode, body)
+		}
+		legacy, err := client.Get(server.URL + "/legacy/status")
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacyBody, _ := io.ReadAll(legacy.Body)
+		legacy.Body.Close()
+		if legacy.StatusCode != http.StatusOK || !bytes.Contains(legacyBody, []byte(`original-only`)) {
+			t.Fatalf("owner=%s legacy status=%d body=%s", owner, legacy.StatusCode, legacyBody)
+		}
+		server.Close()
+	}
+
+	app, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(app.Native)
+	defer server.Close()
+	res, err := server.Client().Get(server.URL + "/native/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"contract":"native"`)) {
+		t.Fatalf("typed Huma status=%d body=%s", res.StatusCode, body)
+	}
+}
+
 func TestOriginalAndBuildSharedHandlerDomainParityAndSingleWrites(t *testing.T) {
 	apps := make([]*App, 2)
 	arms := []string{"original", "build"}
@@ -485,5 +624,37 @@ func TestNativeEnhancementIsAdditiveAndDocumented(t *testing.T) {
 	app.Build.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/native/version", nil))
 	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"version":"1.0.0"`)) {
 		t.Fatalf("native version status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRequestPolicyFilterMatchesOriginalAndAdaptedBeforeHandler(t *testing.T) {
+	app, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arm := range []struct {
+		name    string
+		handler http.Handler
+	}{{"original", app.Original}, {"adapted", app.Build}} {
+		t.Run(arm.name, func(t *testing.T) {
+			_, _, before := app.SideEffects(arm.name)
+			denied := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/projects/1", nil)
+			req.Header.Set("Authorization", "Bearer showcase-token")
+			arm.handler.ServeHTTP(denied, req)
+			_, _, after := app.SideEffects(arm.name)
+			if denied.Code != 403 || denied.Body.String() != "demo request policy denied\n" || after != before {
+				t.Fatalf("denied=%d body=%q calls=%d->%d", denied.Code, denied.Body.String(), before, after)
+			}
+			allowed := httptest.NewRecorder()
+			req = httptest.NewRequest(http.MethodGet, "/projects/1", nil)
+			req.Header.Set("Authorization", "Bearer showcase-token")
+			req.Header.Set("X-Demo-Policy", "allow")
+			arm.handler.ServeHTTP(allowed, req)
+			_, _, after = app.SideEffects(arm.name)
+			if allowed.Code != 200 || after != before+1 {
+				t.Fatalf("allowed=%d calls=%d->%d", allowed.Code, before, after)
+			}
+		})
 	}
 }

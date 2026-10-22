@@ -16,16 +16,18 @@ import (
 
 func main() {
 	addr := flag.String("listen", "127.0.0.1:18082", "HTTP listen address (use :0 for a dynamic port)")
-	arm := flag.String("arm", "composed", "original, adapted (RegisterLegacy), composed, or cutover")
+	arm := flag.String("arm", "composed", "original, adapted (RegisterLegacy), native (humago baseline), composed (Huma typed + legacy on Nirvana), or cutover")
 	owner := flag.String("owner", "original", "cutover owner for POST /projects/{projectID}/tasks: original or adapted")
+	observe := flag.Bool("observe", false, "test-only: serve GET /_demo/observe and, with -arm cutover, POST /_demo/cutover?owner=")
 	flag.Parse()
 	app, err := showcase.New()
 	if err != nil {
 		log.Fatal(err)
 	}
 	var handler http.Handler
+	var cutover *showcase.RouteCutover
 	if *arm == "cutover" {
-		cutover := showcase.NewRouteCutover(app, http.MethodPost, "/projects/{projectID}/tasks")
+		cutover = showcase.NewRouteCutover(app, http.MethodPost, "/projects/{projectID}/tasks")
 		if err := cutover.SetOwner(*owner); err != nil {
 			log.Fatal(err)
 		}
@@ -39,6 +41,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+	}
+	if *observe {
+		handler = app.Observe(handler, cutover, *owner)
+		log.Printf("test-only observation endpoints enabled under %s", showcase.ObservePrefix)
 	}
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {

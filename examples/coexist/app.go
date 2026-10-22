@@ -150,6 +150,18 @@ func (s *store) audit(ctx context.Context, next definition.Chain) error {
 	}()
 	return next.Continue(ctx)
 }
+func (s *store) recordHuma(event string) {
+	s.mu.Lock()
+	s.trace = append(s.trace, event)
+	s.mu.Unlock()
+}
+
+// startHumaTrace keeps only the current Huma request, like audit does for Nirvana.
+func (s *store) startHumaTrace(event string) {
+	s.mu.Lock()
+	s.trace = []string{event}
+	s.mu.Unlock()
+}
 func (s *store) authorize(ctx context.Context, next definition.Chain) error {
 	record(ctx, "auth")
 	if service.HTTPContextFrom(ctx).Request().Header.Get("Authorization") != "Bearer showcase-token" {
@@ -416,6 +428,7 @@ type legacyOperation struct {
 type App struct {
 	Original, Build           http.Handler
 	originalStore, buildStore *store
+	Native, Composed          http.Handler
 	routes                    int
 }
 
@@ -455,46 +468,17 @@ func New() (*App, error) {
 	builder := nrest.NewBuilder()
 	builder.SetModifier(service.DefinitionModifiers{service.FirstContextParameter(), service.ConsumeNoneForHTTPGet(), service.ConsumeNoneForHTTPDelete(), service.ProduceNoneForHTTPDelete()}.Combine())
 	builder.AddFilter(service.ParseRequestForm())
-	builder.AddFilter(func(w http.ResponseWriter, r *http.Request) bool {
-		if r.URL.Path == "/projects/1" && r.Header.Get("X-Demo-Policy") != "allow" {
-			http.Error(w, "demo request policy denied", http.StatusForbidden)
-			return false
-		}
-		return true
-	})
+	builder.AddFilter(demoRequestPolicy)
 	for _, d := range makeDescriptors(originalOps, a.originalStore) {
 		if err := builder.AddDescriptor(d); err != nil {
 			return nil, err
 		}
 	}
-	modifierDescriptor := definition.Descriptor{Path: "/modifier/{projectID}", Definitions: []definition.Definition{{Method: definition.Get, Function: a.originalStore.projectModifierMeta, Parameters: []definition.Parameter{{Source: definition.Path, Name: "projectID"}}, Results: definition.DataErrorResults("Modifier metadata"), Produces: []string{definition.MIMEJSON}, ErrorProduces: []string{definition.MIMEJSON}}}}
-	customModifier := func(d *definition.Definition) {
-		d.Summary = "Modifier changed summary"
-		d.Tags = []string{"modifier-demo"}
-		d.Function = a.originalStore.projectModifierMeta
-		d.Results = []definition.Result{definition.MetaResultFor("Modifier metadata"), definition.ErrorResult()}
-	}
-	modifierBuilder := nrest.NewBuilder()
-	modifierBuilder.SetModifier(service.DefinitionModifiers{service.FirstContextParameter(), service.ConsumeNoneForHTTPGet(), customModifier}.Combine())
-	if err := modifierBuilder.AddDescriptor(modifierDescriptor); err != nil {
-		return nil, err
-	}
-	modifierHandler, err := modifierBuilder.Build()
+	modifierHandler, err := buildModifierHandler(a.originalStore, addDescriptors)
 	if err != nil {
 		return nil, err
 	}
-	// These v0.3.1 source generators are intentionally original-only until
-	// pilot supports Auto, Form, and File without changing the public Build API.
-	originalExtras := definition.Descriptor{Path: "/showcase", Children: []definition.Descriptor{
-		{Path: "/projects/{projectID}/scope", Definitions: []definition.Definition{{Method: definition.Get, Function: a.originalStore.scopeInfo, Parameters: []definition.Parameter{{Source: definition.Path, Name: "projectID"}, {Source: definition.Prefab, Name: "showcase-request-scope"}, {Source: definition.Prefab, Name: "showcase-config-singleton"}}, Results: definition.DataErrorResults("ScopeInfo"), Produces: []string{definition.MIMEJSON}, ErrorProduces: []string{definition.MIMEJSON}}}},
-		{Path: "/projects/{projectID}/context", Middlewares: []definition.Middleware{func(ctx context.Context, next definition.Chain) error {
-			child, cancel := context.WithTimeout(ctx, time.Minute)
-			defer cancel()
-			return next.Continue(child)
-		}}, Definitions: []definition.Definition{{Method: definition.Get, Function: a.originalStore.probeContext, Parameters: []definition.Parameter{{Source: definition.Auto, Name: "probe"}}, Results: definition.DataErrorResults("ContextProbe"), Produces: []string{definition.MIMEJSON}, ErrorProduces: []string{definition.MIMEJSON}}}},
-		{Path: "/projects/{projectID}/attachments", Definitions: []definition.Definition{{Method: definition.Create, Function: a.originalStore.uploadAttachment, Parameters: []definition.Parameter{{Source: definition.Path, Name: "projectID"}, definition.FormParameterFor("label", "Attachment label"), definition.FileParameterFor("file", "Attachment file")}, Results: definition.DataErrorResults("Attachment"), Consumes: []string{definition.MIMEFormData}, Produces: []string{definition.MIMEJSON}, ErrorProduces: []string{definition.MIMEJSON}}}},
-	}}
-	if err := builder.AddDescriptor(originalExtras); err != nil {
+	if err := builder.AddDescriptor(extraDescriptor(a.originalStore)); err != nil {
 		return nil, err
 	}
 	original, err := builder.Build()
@@ -502,13 +486,15 @@ func New() (*App, error) {
 		return nil, err
 	}
 	buildBuilder := nrest.NewBuilder()
-	buildBuilder.SetModifier(service.DefinitionModifiers{service.ConsumeNoneForHTTPGet(), service.ConsumeNoneForHTTPDelete(), service.ProduceNoneForHTTPDelete()}.Combine())
+	buildBuilder.AddFilter(service.ParseRequestForm())
+	buildBuilder.AddFilter(demoRequestPolicy)
+	buildBuilder.SetModifier(service.DefinitionModifiers{service.FirstContextParameter(), service.ConsumeNoneForHTTPGet(), service.ConsumeNoneForHTTPDelete(), service.ProduceNoneForHTTPDelete()}.Combine())
 	buildAdapter := humanirvana.NewAdapter(buildBuilder)
 	buildAPI := huma.NewAPI(huma.DefaultConfig("Nirvana Showcase", "1.0.0"), buildAdapter)
-	if err := humanirvana.RegisterLegacy(buildBuilder, makeDescriptors(buildOps, a.buildStore)); err != nil {
+	if err := humanirvana.RegisterLegacy(buildBuilder, append(makeDescriptors(buildOps, a.buildStore), extraDescriptor(a.buildStore))); err != nil {
 		return nil, err
 	}
-	if err := registerNative(buildAPI); err != nil {
+	if err := registerNative(buildAPI, a.buildStore); err != nil {
 		return nil, err
 	}
 	built, err := buildBuilder.Build()
@@ -518,16 +504,68 @@ func New() (*App, error) {
 	if err := buildAdapter.Bind(built); err != nil {
 		return nil, err
 	}
-	a.Original = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/modifier/") {
-			modifierHandler.ServeHTTP(w, r)
-			return
-		}
-		original.ServeHTTP(w, r)
-	})
-	a.Build = buildAdapter
+	buildModifier, err := buildModifierHandler(a.buildStore, humanirvana.RegisterLegacy)
+	if err != nil {
+		return nil, err
+	}
+	a.Original = withModifierRoute(original, modifierHandler)
+	a.Build = withModifierRoute(buildAdapter, buildModifier)
+	a.Native = nativeService(a.buildStore)
+	a.Composed = a.Build
 	a.routes = 5
 	return a, nil
+}
+
+// buildModifierHandler shows a DefinitionModifier on its own builder, so the
+// modifier does not change the shared project/task routes.
+func buildModifierHandler(s *store, register func(service.Builder, []definition.Descriptor) error) (http.Handler, error) {
+	modifierDescriptor := definition.Descriptor{Path: "/modifier/{projectID}", Definitions: []definition.Definition{{Method: definition.Get, Function: s.projectModifierMeta, Parameters: []definition.Parameter{{Source: definition.Path, Name: "projectID"}}, Results: definition.DataErrorResults("Modifier metadata"), Produces: []string{definition.MIMEJSON}, ErrorProduces: []string{definition.MIMEJSON}}}}
+	customModifier := func(d *definition.Definition) {
+		d.Summary = "Modifier changed summary"
+		d.Tags = []string{"modifier-demo"}
+		d.Function = s.projectModifierMeta
+		d.Results = []definition.Result{definition.MetaResultFor("Modifier metadata"), definition.ErrorResult()}
+	}
+	modifierBuilder := nrest.NewBuilder()
+	modifierBuilder.SetModifier(service.DefinitionModifiers{service.FirstContextParameter(), service.ConsumeNoneForHTTPGet(), customModifier}.Combine())
+	if err := register(modifierBuilder, []definition.Descriptor{modifierDescriptor}); err != nil {
+		return nil, err
+	}
+	return modifierBuilder.Build()
+}
+
+// addDescriptors is the original application's plain Nirvana registration.
+func addDescriptors(builder service.Builder, descriptors []definition.Descriptor) error {
+	for _, d := range descriptors {
+		if err := builder.AddDescriptor(d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func withModifierRoute(next, modifier http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/modifier/") {
+			modifier.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// extraDescriptor covers Auto, Prefab, Form and File parameter sources and a
+// node middleware that derives a deadline context.
+func extraDescriptor(s *store) definition.Descriptor {
+	return definition.Descriptor{Path: "/showcase", Children: []definition.Descriptor{
+		{Path: "/projects/{projectID}/scope", Definitions: []definition.Definition{{Method: definition.Get, Function: s.scopeInfo, Parameters: []definition.Parameter{{Source: definition.Path, Name: "projectID"}, {Source: definition.Prefab, Name: "showcase-request-scope"}, {Source: definition.Prefab, Name: "showcase-config-singleton"}}, Results: definition.DataErrorResults("ScopeInfo"), Produces: []string{definition.MIMEJSON}, ErrorProduces: []string{definition.MIMEJSON}}}},
+		{Path: "/projects/{projectID}/context", Middlewares: []definition.Middleware{func(ctx context.Context, next definition.Chain) error {
+			child, cancel := context.WithTimeout(ctx, time.Minute)
+			defer cancel()
+			return next.Continue(child)
+		}}, Definitions: []definition.Definition{{Method: definition.Get, Function: s.probeContext, Parameters: []definition.Parameter{{Source: definition.Auto, Name: "probe"}}, Results: definition.DataErrorResults("ContextProbe"), Produces: []string{definition.MIMEJSON}, ErrorProduces: []string{definition.MIMEJSON}}}},
+		{Path: "/projects/{projectID}/attachments", Definitions: []definition.Definition{{Method: definition.Create, Function: s.uploadAttachment, Parameters: []definition.Parameter{{Source: definition.Path, Name: "projectID"}, definition.FormParameterFor("label", "Attachment label"), definition.FileParameterFor("file", "Attachment file")}, Results: definition.DataErrorResults("Attachment"), Consumes: []string{definition.MIMEFormData}, Produces: []string{definition.MIMEJSON}, ErrorProduces: []string{definition.MIMEJSON}}}},
+	}}
 }
 
 func definitionsAt(ops []legacyOperation, path string) []definition.Definition {
@@ -547,19 +585,39 @@ type nativeOut struct {
 	Body map[string]any `json:"body"`
 }
 
-func registerNative(api huma.API) error {
+func registerNative(api huma.API, s *store) error {
 	group := huma.NewGroup(api, "/native")
 	group.UseSimpleModifier(func(op *huma.Operation) { op.Tags = []string{"native-enhancement"} })
+	group.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
+		s.startHumaTrace("native.before")
+		next(ctx)
+		s.recordHuma("native.after")
+	})
 	huma.Register[struct{}, nativeOut](group, huma.Operation{OperationID: "native-health", Method: http.MethodGet, Path: "/health"}, func(context.Context, *struct{}) (*nativeOut, error) {
+		s.recordHuma("handler")
+		s.mu.Lock()
+		s.handlerCalls++
+		s.mu.Unlock()
 		return &nativeOut{Body: map[string]any{"status": "ok", "contract": "native"}}, nil
 	})
 	huma.Register[struct{}, nativeOut](group, huma.Operation{OperationID: "native-version", Method: http.MethodGet, Path: "/version"}, func(context.Context, *struct{}) (*nativeOut, error) {
+		s.recordHuma("handler")
 		return &nativeOut{Body: map[string]any{"name": "Nirvana Showcase", "version": "1.0.0", "contract": "native"}}, nil
 	})
 	huma.Register[nativeID, nativeOut](group, huma.Operation{OperationID: "native-async-status", Method: http.MethodGet, Path: "/async/{id}"}, func(_ context.Context, in *nativeID) (*nativeOut, error) {
+		s.recordHuma("handler")
 		return &nativeOut{Body: map[string]any{"id": in.ID, "state": "completed", "contract": "native"}}, nil
 	})
 	return nil
+}
+
+func nativeService(s *store) http.Handler {
+	router := http.NewServeMux()
+	api := humago.New(router, huma.DefaultConfig("Nirvana Showcase Native", "1.0.0"))
+	if err := registerNative(api, s); err != nil {
+		panic(err)
+	}
+	return router
 }
 
 func (a *App) Handler(arm string) (http.Handler, error) {
@@ -570,7 +628,11 @@ func (a *App) Handler(arm string) (http.Handler, error) {
 	case "build", "adapted":
 		base = a.Build
 	case "native", "composed":
-		base = a.Build
+		if arm == "native" {
+			base = a.Native
+		} else {
+			base = a.Composed
+		}
 	default:
 		return nil, fmt.Errorf("unknown arm %q", arm)
 	}
@@ -597,7 +659,14 @@ func (a *App) Trace(arm string) []string {
 
 // NativeOnly creates a standard-library Huma reference service.
 func NativeOnly() http.Handler {
-	router := http.NewServeMux()
-	_ = registerNative(humago.New(router, huma.DefaultConfig("Nirvana Showcase Native", "1.0.0")))
-	return router
+	return nativeService(newStore())
+}
+
+// Both application entry points retain the same outer request policy.
+func demoRequestPolicy(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.Path == "/projects/1" && r.Header.Get("X-Demo-Policy") != "allow" {
+		http.Error(w, "demo request policy denied", http.StatusForbidden)
+		return false
+	}
+	return true
 }

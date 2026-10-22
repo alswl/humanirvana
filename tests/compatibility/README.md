@@ -74,3 +74,7 @@ curl -i http://127.0.0.1:18080/migrated/openapi.json
 - CLI 冒烟：分别启动 original、migrated、rollback 模式，通过真实 HTTP 检查两个后端与应用入口的写入、未迁移接口归属及 OpenAPI；检查后终止本次创建的进程。
 
 尚未交付真实项目接口验证、全量兼容支持及性能结论。
+
+## T071 汇总（2026-10-22）
+
+锁定 Go 1.23.12、Huma v2.35.0、官方 Nirvana v0.3.1。`go test -race -count=1 ./...` 通过：127 pass、1 skip（外部服务对照未给地址）。本目录 62 个测试（其中 3 个为独立原生 Huma 基线）全部通过。按当前 Nirvana 适配器判定的 60 项 Huma 能力：支持 0、部分支持 56、不支持 2（CBOR、merge-patch，均为 Nirvana 媒体准入 415）、尚未验证 0、不适用 2（Huma 其他 router adapter）。"部分支持"只代表列出的 case 通过。完整清单与依据见责任 spec 的 `contracts/compatibility.md`「T071」节。真实接口与性能验收仍开放。
