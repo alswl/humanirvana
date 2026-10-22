@@ -1,0 +1,11 @@
+{
+  "id": "P05",
+  "method": "GET",
+  "path": "/perf/middleware",
+  "header": {
+    "X-Request-ID": "perf-req-1"
+  },
+  "want_status": 200,
+  "want_content_type": "application/json",
+  "want_body": "{\"order\":[\"api\",\"op1\",\"op2\"],\"values\":\"a,b,c\",\"request_id\":\"perf-req-1\"}\n"
+}

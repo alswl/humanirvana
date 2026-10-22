@@ -1,0 +1,11 @@
+{
+  "id": "P01",
+  "method": "GET",
+  "path": "/perf/params/7?count=2\u0026enabled=true",
+  "header": {
+    "X-Tenant": "fixture"
+  },
+  "want_status": 200,
+  "want_content_type": "application/json",
+  "want_body": "{\"id\":7,\"count\":2,\"enabled\":true,\"tenant\":\"fixture\"}\n"
+}

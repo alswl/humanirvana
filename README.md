@@ -6,12 +6,24 @@ legacy Nirvana descriptors share the same routing tree.
 
 ## Status
 
-Experimental checkpoint for development and evaluation. The adapter builds
-against unmodified Nirvana v0.3.1 and has passed local Go/race and HTTP checks.
-The latest descriptor-based candidate has not yet had an independent API
-verification pass or real-application migration acceptance. Full Huma coverage,
-coverage/performance targets, and final acceptance remain open. Review the media
-and method restrictions below before trying it.
+Experimental. The adapter builds against unmodified Nirvana v0.3.1 and passes
+the local build, race, comparison and coverage checks listed below. Full Huma
+coverage and real-application migration acceptance are **not** established:
+of 60 tracked Huma capabilities, 56 are partially supported (only the listed
+cases are verified), 2 are unsupported (CBOR, merge-patch) and 2 are not
+applicable. Review the media and method restrictions below before trying it.
+
+## Install
+
+Requires Go 1.23 or later (CI uses Go 1.23.12).
+
+```sh
+go get github.com/alswl/humanirvana
+```
+
+The module depends on `github.com/danielgtaylor/huma/v2` v2.35.0 and
+`github.com/caicloud/nirvana` v0.3.1; no `replace` directive or Go workspace
+is needed.
 
 ## Usage
 
@@ -123,9 +135,27 @@ go run ./examples/basic/cmd -mode mixed -listen 127.0.0.1:18080
 The compatibility suite includes independent Huma baselines and synthetic
 legacy applications; it records the CBOR restriction rather than claiming
 complete Huma equivalence. Passing it does not establish a real application's
-lossless migration. Tests under `tests/integration/` additionally require
-explicit `HUMANIRVANA_HUMA_URL` and `HUMANIRVANA_NIRVANA_URL` fixture addresses;
-otherwise that external-server group is skipped.
+lossless migration. The external-server tests in `tests/integration/e2e_test.go`
+additionally require explicit `HUMANIRVANA_HUMA_URL` and
+`HUMANIRVANA_NIRVANA_URL` fixture addresses; otherwise that group is skipped.
+
+## Quality checks
+
+```sh
+make cover01   # COVER-01: library statement coverage must be >= 80%
+go run ./tests/performance/perf01 -h   # PERF-01 harness, see tests/performance/README.md
+```
+
+`make cover01` runs the library and `tests/` packages once with an atomic
+profile and fails below 80% of the library's statements (examples are not
+counted). CI runs build, vet, unit, comparison, race and COVER-01 checks.
+
+## Documentation
+
+- [Migration guide](docs/manual-migration.md): choose, bind, compare, cut over
+  and roll back one operation at a time.
+- [Migration checklist](docs/checklist.md)
+- [Examples and recorded results](docs/examples.md)
 
 ## Layout
 
@@ -134,11 +164,15 @@ adapter.go                 Huma route registration and HTTP delegation
 context.go                 Per-request Huma context
 legacy.go                  Optional legacy descriptor registration
 adapter_test.go            Public adapter regression tests
-internal/                  Auxiliary conversion and experimental bridge packages
+internal/                  Historical conversion and pilot packages, not used by the adapter
+docs/                      Migration guide, checklist and example results
 examples/basic/            Small typed/legacy coexistence application
-examples/coexist/          Larger synthetic Nirvana feature application
+examples/middleware/       Auth, request-ID logging and shared dependencies
+examples/coexist/          Larger synthetic Nirvana feature application with cutover
 tests/compatibility/       Huma capability and legacy behavior comparisons
-tests/integration/         External-server demo integration tests
+tests/integration/         Monitoring/context tests and external-server demo tests
+tests/performance/         PERF-01 fixture, server, load generator and runner
+tests/unit/cover01/        COVER-01 gate
 ```
 
 Unit tests live beside the package they exercise. Experimental code in

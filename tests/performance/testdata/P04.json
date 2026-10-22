@@ -1,0 +1,12 @@
+{
+  "id": "P04",
+  "method": "POST",
+  "path": "/perf/validate",
+  "header": {
+    "Content-Type": "application/json"
+  },
+  "body_file": "P04.body.json",
+  "want_status": 422,
+  "want_content_type": "application/problem+json",
+  "want_body": "{\"title\":\"Unprocessable Entity\",\"status\":422,\"detail\":\"validation failed\",\"errors\":[{\"message\":\"expected number \u003e= 1\",\"location\":\"body.quantity\",\"value\":0}]}\n"
+}

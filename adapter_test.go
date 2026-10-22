@@ -465,3 +465,139 @@ func TestDescriptorBridgePreservesFiltersMiddlewareAndMediaAdmission(t *testing.
 		t.Fatal("adapter changed Nirvana's global media registry")
 	}
 }
+
+type requestIDKey struct{}
+
+// T033: a Nirvana node middleware that derives the request context (request
+// ID, auth, access log) must reach Huma middleware and the handler unchanged,
+// and must observe Huma's final status, including errors and rejections.
+func TestNirvanaRequestContextReachesHumaAndLogsOutcome(t *testing.T) {
+	h := newAPI()
+	type logEntry struct {
+		id     string
+		status int
+	}
+	var log []logEntry
+	err := h.builder.AddDescriptor(definition.Descriptor{Path: "/", Middlewares: []definition.Middleware{
+		func(ctx context.Context, next definition.Chain) error {
+			id := service.HTTPContextFrom(ctx).Request().Header.Get("X-Request-ID")
+			if id == "" {
+				id = "generated"
+			}
+			if service.HTTPContextFrom(ctx).Request().Header.Get("Authorization") != "Bearer ok" {
+				return fmt.Errorf("unauthorized")
+			}
+			err := next.Continue(context.WithValue(ctx, requestIDKey{}, id))
+			log = append(log, logEntry{id, service.HTTPContextFrom(ctx).ResponseWriter().StatusCode()})
+			return err
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seenByMiddleware, seenByHandler []any
+	h.api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
+		seenByMiddleware = append(seenByMiddleware, ctx.Context().Value(requestIDKey{}))
+		next(ctx)
+	})
+	calls := 0
+	huma.Register[struct {
+		Fail bool `query:"fail"`
+	}, reply](h.api, huma.Operation{Method: http.MethodGet, Path: "/traced", OperationID: "traced"}, func(ctx context.Context, in *struct {
+		Fail bool `query:"fail"`
+	}) (*reply, error) {
+		calls++
+		seenByHandler = append(seenByHandler, ctx.Value(requestIDKey{}))
+		if in.Fail {
+			return nil, huma.Error409Conflict("conflict")
+		}
+		return &reply{"ok"}, nil
+	})
+	h.finish(t)
+
+	do := func(target, id, auth string) int {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		if id != "" {
+			r.Header.Set("X-Request-ID", id)
+		}
+		if auth != "" {
+			r.Header.Set("Authorization", auth)
+		}
+		w := httptest.NewRecorder()
+		h.handler.ServeHTTP(w, r)
+		return w.Code
+	}
+	if code := do("/traced", "req-1", "Bearer ok"); code != http.StatusOK {
+		t.Fatalf("success status %d", code)
+	}
+	if code := do("/traced?fail=true", "req-2", "Bearer ok"); code != http.StatusConflict {
+		t.Fatalf("error status %d", code)
+	}
+	if code := do("/traced", "", "Bearer ok"); code != http.StatusOK {
+		t.Fatalf("generated-id status %d", code)
+	}
+	if code := do("/traced", "req-3", ""); code < 400 {
+		t.Fatalf("unauthorized request returned %d", code)
+	}
+
+	wantIDs := []any{"req-1", "req-2", "generated"}
+	if !reflect.DeepEqual(seenByMiddleware, wantIDs) || !reflect.DeepEqual(seenByHandler, wantIDs) {
+		t.Fatalf("request IDs: middleware=%v handler=%v want %v", seenByMiddleware, seenByHandler, wantIDs)
+	}
+	if calls != 3 {
+		t.Fatalf("handler calls = %d, want 3 (rejected request must not reach Huma)", calls)
+	}
+	wantLog := []logEntry{{"req-1", 200}, {"req-2", 409}, {"generated", 200}}
+	if !reflect.DeepEqual(log, wantLog) {
+		t.Fatalf("access log = %v, want %v", log, wantLog)
+	}
+}
+
+// Public API misuse returns an error or panics instead of serving a half-bound
+// router.
+func TestPublicAPIMisuseIsRejected(t *testing.T) {
+	assertPanics := func(name string, f func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s: expected panic", name)
+			}
+		}()
+		f()
+	}
+	assertPanics("NewAdapter(nil)", func() { humanirvana.NewAdapter(nil) })
+	assertPanics("Handle(nil, nil)", func() { humanirvana.NewAdapter(rest.NewBuilder()).Handle(nil, nil) })
+	assertPanics("unsupported method", func() {
+		humanirvana.NewAdapter(rest.NewBuilder()).Handle(&huma.Operation{Method: "TRACE", Path: "/x"}, func(huma.Context) {})
+	})
+
+	adapter := humanirvana.NewAdapter(rest.NewBuilder())
+	w := httptest.NewRecorder()
+	adapter.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unbound adapter served %d, want 503", w.Code)
+	}
+	if err := adapter.Bind(nil); err == nil {
+		t.Fatal("Bind(nil) succeeded")
+	}
+	if err := adapter.Bind(http.NotFoundHandler()); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Bind(http.NotFoundHandler()); err == nil {
+		t.Fatal("second Bind succeeded")
+	}
+
+	if err := humanirvana.RegisterLegacy(nil, nil); err == nil {
+		t.Fatal("RegisterLegacy(nil builder) succeeded")
+	}
+	err := humanirvana.RegisterLegacy(failingBuilder{rest.NewBuilder()}, []definition.Descriptor{{Path: "/legacy"}})
+	if err == nil || !strings.Contains(err.Error(), "/legacy") {
+		t.Fatalf("RegisterLegacy error = %v, want the builder error with the descriptor path", err)
+	}
+}
+
+// failingBuilder rejects every descriptor, standing in for any AddDescriptor
+// failure of the application's builder.
+type failingBuilder struct{ service.Builder }
+
+func (failingBuilder) AddDescriptor(...interface{}) error { return errors.New("rejected") }

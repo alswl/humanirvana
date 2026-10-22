@@ -15,13 +15,27 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.23.12"
 
-      - name: Build
-        run: go build ./...
+      - name: Build library, tests and examples
+        run: go build ./... && go vet ./...
 
       - name: Unit tests
-        run: go test . ./internal/... -v -count=1
+        run: go test . ./internal/... ./tests/unit/... -v -count=1
 
-      - name: TDD migration application
+      - name: Behavior comparison
         run: make demo-tdd
+
+      - name: Full race run
+        run: go test -race -count=1 ./...
+
+      - name: COVER-01
+        run: make cover01
+
+      - name: Upload COVER-01 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cover01
+          path: bin/cover01/
+          if-no-files-found: error
