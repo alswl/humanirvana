@@ -43,6 +43,10 @@ Register everything before `Build`, then `Bind` once. Legacy routes keep
 Nirvana's execution chain and do not appear in Huma's OpenAPI. Your
 application owns startup, configuration, dependencies and shutdown.
 
+Optional [plugin lifecycle management](docs/guide/plugins.md) installs an explicit
+ordered plugin list and returns an idempotent cleanup function. The application
+continues to own configuration, routing and HTTP lifecycle.
+
 ## Documentation
 
 - [Migrate an operation](docs/guide/migration.md) and its [checklist](docs/guide/checklist.md)
