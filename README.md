@@ -43,6 +43,12 @@ Register everything before `Build`, then `Bind` once. Legacy routes keep
 Nirvana's execution chain and do not appear in Huma's OpenAPI. Your
 application owns startup, configuration, dependencies and shutdown.
 
+For a complete minimal mixed-route example, see [example_test.go](example_test.go).
+[`humanirvana.Unwrap`](docs/manual/adapter-contract.md#native-context-and-propagation)
+exposes the native request and Nirvana response writer through Huma wrappers.
+Set multipart `MaxBodyBytes` explicitly; see the [version-specific limits and
+error responses](docs/manual/adapter-contract.md#multipart-body-size).
+
 Optional [plugin lifecycle management](docs/guide/plugins.md) installs an explicit
 ordered plugin list and returns an idempotent cleanup function. The application
 continues to own configuration, routing and HTTP lifecycle.

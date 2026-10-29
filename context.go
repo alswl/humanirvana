@@ -23,9 +23,28 @@ type humaContext struct {
 	response http.ResponseWriter
 	values   service.ValueContainer
 	status   int
+	formRead bool
+	formErr  error
 }
 
 var _ huma.Context = (*humaContext)(nil)
+
+// Unwrap extracts the Nirvana request and response writer, including through
+// huma.WithContext/WithValue wrappers. It panics for another adapter's context.
+// The writer is Nirvana's tracking writer, not the original server writer.
+// Huma context overrides are available via ctx.Context(), not request.Context().
+func Unwrap(ctx huma.Context) (*http.Request, http.ResponseWriter) {
+	for {
+		if wrapped, ok := ctx.(interface{ Unwrap() huma.Context }); ok {
+			ctx = wrapped.Unwrap()
+			continue
+		}
+		if c, ok := ctx.(*humaContext); ok {
+			return c.request, c.response
+		}
+		panic("not a humanirvana context")
+	}
+}
 
 func newContext(op *huma.Operation, route string, ctx context.Context, request *http.Request, response http.ResponseWriter, values service.ValueContainer) *humaContext {
 	return &humaContext{op: op, route: route, ctx: ctx, request: request, response: response, values: values}
@@ -43,7 +62,8 @@ func (c *humaContext) RemoteAddr() string { return c.request.RemoteAddr }
 func (c *humaContext) URL() url.URL       { return *c.request.URL }
 func (c *humaContext) Param(name string) string {
 	value, _ := c.values.Get(name)
-	if value == "" && c.route != c.op.Path {
+	// Shared templates can swap parameter names between methods.
+	if c.route != c.op.Path {
 		opParams := routeParamNames(c.op.Path)
 		matchedParams := routeParamNames(c.route)
 		for i, param := range opParams {
@@ -81,10 +101,20 @@ func (c *humaContext) EachHeader(callback func(name, value string)) {
 }
 func (c *humaContext) BodyReader() io.Reader { return c.request.Body }
 func (c *humaContext) GetMultipartForm() (*multipart.Form, error) {
-	if err := c.request.ParseMultipartForm(8 << 10); err != nil {
-		return c.request.MultipartForm, err
+	// Retrying a partially consumed body can lose the original parse error.
+	if !c.formRead {
+		c.formRead = true
+		// ParseMultipartForm's memory threshold does not limit the total body.
+		if c.op.MaxBodyBytes > 0 {
+			c.request.Body = http.MaxBytesReader(c.response, c.request.Body, c.op.MaxBodyBytes)
+		}
+		c.formErr = c.request.ParseMultipartForm(8 << 10)
+		if c.formErr == nil && c.op.MaxBodyBytes > 0 {
+			// Multipart parsers may stop before the epilogue, which also counts toward the limit.
+			_, c.formErr = io.Copy(io.Discard, c.request.Body)
+		}
 	}
-	return c.request.MultipartForm, nil
+	return c.request.MultipartForm, c.formErr
 }
 func (c *humaContext) SetReadDeadline(deadline time.Time) error {
 	return huma.SetReadDeadline(c.response, deadline)

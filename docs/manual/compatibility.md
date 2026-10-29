@@ -7,6 +7,10 @@ Go workspace is needed.
 Nirvana owns routing and media admission. Admitted requests enter the Huma
 middleware, binding, validation, handler and response chain.
 
+See the [adapter contract](adapter-contract.md) for native `Unwrap`, exact
+context propagation, multipart size/error behavior, routing and Build/Bind
+boundaries, including migration notes and contract tests.
+
 ## Support
 
 | Capability | Status | Boundary |
@@ -21,7 +25,7 @@ middleware, binding, validation, handler and response chain.
 | CBOR (default Nirvana media registry) | Unsupported | 415 before the Huma callback, even when CBOR is enabled in Huma's format configuration. |
 | Media absent from Nirvana's registry, e.g. `application/merge-patch+json`, `application/x-raw`, `application/x-test` | Unsupported for those media | 415 before AutoPatch, RawBody handling or a custom decoder runs. Other RawBody or PATCH uses are not affected. |
 | Same media-admission error as native Huma | Unsupported | Unknown media returns 415 with Nirvana's JSON error body, not Huma's problem response. Unsupported `Accept` can return 406. |
-| All Huma capabilities; real-application lossless migration | Not established | Of 60 tracked Huma capabilities, 56 are partial and 2 unsupported. Synthetic examples do not prove a real migration. |
+| All Huma capabilities; real-application lossless migration | Not established | Verify the capability combinations your application uses. Synthetic examples do not prove a real migration. |
 
 The adapter does not change Nirvana's global consumer/producer registries or
 rewrite request headers to hide media limits. Do not advertise CBOR or other

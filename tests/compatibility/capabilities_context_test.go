@@ -161,25 +161,22 @@ func TestCapabilityQueryParamEdgesNativeHTTPBaseline(t *testing.T) {
 	}
 }
 
-func TestCapabilityContextAdapterEntriesNativeHTTPBaseline(t *testing.T) {
-	for _, build := range []bool{false, true} {
-		_ = capabilityContextHandler(t, build) // exercise independent native and Build setup
-		r := httptest.NewRequest(http.MethodGet, "/", nil)
-		state := &tls.ConnectionState{Version: tls.VersionTLS12, ServerName: "context.example"}
-		r.TLS = state
-		r.Proto, r.ProtoMajor, r.ProtoMinor = "HTTP/2.0", 2, 0
-		w := httptest.NewRecorder()
-		ctx := humago.NewContext(&huma.Operation{OperationID: "manual"}, r, w)
-		gotReq, gotWriter := humago.Unwrap(ctx)
-		if gotReq != r || gotWriter != w || ctx.Operation().OperationID != "manual" || ctx.TLS() != state || ctx.Version() != (huma.ProtoVersion{Proto: "HTTP/2.0", ProtoMajor: 2}) {
-			t.Fatalf("Build=%v NewContext/Unwrap observation mismatch", build)
-		}
-		if gotReq2, gotWriter2 := humago.Unwrap(huma.WithValue(ctx, "nested", true)); gotReq2 != r || gotWriter2 != w {
-			t.Fatalf("Build=%v Unwrap failed through WithValue", build)
-		}
-		if err := ctx.SetReadDeadline(time.Now().Add(time.Minute)); err == nil || err.Error() != "feature not supported" {
-			t.Fatalf("Build=%v deadline fallback error=%v", build, err)
-		}
+func TestCapabilityHumagoContextAdapterEntriesBaseline(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	state := &tls.ConnectionState{Version: tls.VersionTLS12, ServerName: "context.example"}
+	r.TLS = state
+	r.Proto, r.ProtoMajor, r.ProtoMinor = "HTTP/2.0", 2, 0
+	w := httptest.NewRecorder()
+	ctx := humago.NewContext(&huma.Operation{OperationID: "manual"}, r, w)
+	gotReq, gotWriter := humago.Unwrap(ctx)
+	if gotReq != r || gotWriter != w || ctx.Operation().OperationID != "manual" || ctx.TLS() != state || ctx.Version() != (huma.ProtoVersion{Proto: "HTTP/2.0", ProtoMajor: 2}) {
+		t.Fatalf("NewContext/Unwrap observation mismatch")
+	}
+	if gotReq2, gotWriter2 := humago.Unwrap(huma.WithValue(ctx, "nested", true)); gotReq2 != r || gotWriter2 != w {
+		t.Fatalf("Unwrap failed through WithValue")
+	}
+	if err := ctx.SetReadDeadline(time.Now().Add(time.Minute)); err == nil || err.Error() != "feature not supported" {
+		t.Fatalf("deadline fallback error=%v", err)
 	}
 	for _, tc := range []struct {
 		name, contentType, body string
@@ -188,17 +185,15 @@ func TestCapabilityContextAdapterEntriesNativeHTTPBaseline(t *testing.T) {
 		{"valid", "multipart/form-data; boundary=b", "--b\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n--b--\r\n", false},
 		{"malformed", "multipart/form-data; boundary=b", "not multipart", true},
 	} {
-		for _, build := range []bool{false, true} {
-			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
-			r.Header.Set("Content-Type", tc.contentType)
-			hc := humago.NewContext(&huma.Operation{}, r, httptest.NewRecorder())
-			form, err := hc.GetMultipartForm()
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("case=%s Build=%v form=%v err=%v", tc.name, build, form, err)
-			}
-			if !tc.wantErr && form.Value["field"][0] != "value" {
-				t.Fatalf("case=%s Build=%v form=%v", tc.name, build, form.Value)
-			}
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+		r.Header.Set("Content-Type", tc.contentType)
+		hc := humago.NewContext(&huma.Operation{}, r, httptest.NewRecorder())
+		form, err := hc.GetMultipartForm()
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("case=%s form=%v err=%v", tc.name, form, err)
+		}
+		if !tc.wantErr && form.Value["field"][0] != "value" {
+			t.Fatalf("case=%s form=%v", tc.name, form.Value)
 		}
 	}
 }

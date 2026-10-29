@@ -76,8 +76,7 @@ Rules that matter:
   a failed build must not be served. Registration is not transactional.
 - Reuse the same service method and dependency instances; do not copy the
   business logic into the Huma handler.
-- Install the same Filters on both builders. A missing Filter on the adapted
-  builder changed a 403 into a 200 in the Stage04 demo before it was fixed.
+- Install the same Filters on both builders so admission rules remain consistent.
 - Nirvana node middleware still wraps Huma operations, and values it puts in
   the request context reach Huma middleware and handlers.
 
@@ -92,8 +91,8 @@ equivalent initial state, and compare:
 - middleware order and short-circuit behavior;
 - side-effect counts (writes, handler calls).
 
-`examples/coexist/compare_test.go` is a working pattern: it runs a 43-step
-script against both arms, fails on any difference, and checks that the
+`examples/coexist/compare_test.go` is a working pattern: it runs the same
+requests against both arms, fails on any difference, and checks that the
 comparison itself detects a deliberate difference. Add negative cases (missing
 auth, validation failures, handler errors, unknown routes, wrong media).
 

@@ -1,5 +1,9 @@
 # Examples
 
+The [executable minimal example](../../example_test.go) shares `/items/{id}`
+between legacy GET and Huma POST, uses `Unwrap` through a Huma value wrapper,
+and builds/binds explicitly. Run `go test . -run '^Example$' -v`.
+
 | Example | Shows | Run |
 | --- | --- | --- |
 | [examples/basic](../../examples/basic) | Typed Huma operations (input, validation, response headers, a short-circuit middleware). `-mode mixed` adds one original Nirvana descriptor through `RegisterLegacy`. | `go run ./examples/basic/cmd -mode mixed -listen 127.0.0.1:18080` |
@@ -21,5 +25,4 @@ operation is `POST /projects/{projectID}/tasks`.
 | Other routes | `builder.AddDescriptor` | `RegisterLegacy` with the same descriptors |
 | State | its own in-memory store | an equivalent, separate store |
 
-Only the store differs, so writes can be counted per runtime. Test results are
-in [Build and test](../dev/testing.md#recorded-results).
+Only the store differs, so writes can be counted per runtime.
